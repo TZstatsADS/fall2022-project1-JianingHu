@@ -1,0 +1,207 @@
+---
+title: "5243_Project1"
+author: "Jianing Hu"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    code_folding: hide
+---
+
+# School Differentiation
+
+```{r setup, include = FALSE, echo = FALSE}
+packages.used=as.list(
+  c("tm", "tidytext", "tidyverse","tidyr", "tibble", "knitr", "ngram", "egg",
+    "sentimentr", "dplyr", "wordcloud", "RColorBrewer","broom","textdata",
+    "topicmodels", "stringr", "rvest", "syuzhet")
+)
+# check packages that need to be installed.
+packages.needed=setdiff(packages.used, 
+                        intersect(installed.packages()[,1], 
+                                  packages.used))
+# install additional packages
+if(length(packages.needed)>0){
+  install.packages(packages.needed, dependencies = TRUE)}
+  
+
+library(tidyverse)
+library(tidytext)
+library(tm)
+library(RColorBrewer)
+library(plotly)
+library(wordcloud)
+```
+
+```{r prep-data, echo=FALSE, message=FALSE, warning=FALSE, include= FALSE}
+data <- read.csv("philosophy_data.csv", stringsAsFactors = FALSE)
+#frequency
+Freq <- function(data) {
+    VCorpus(VectorSource(data$sentence_str)) %>%
+    tm_map(removePunctuation) %>%
+    tm_map(removeWords, stopwords("en")) %>%
+    tm_map(removeWords, character(0)) %>%
+    TermDocumentMatrix() %>%
+    tidy() %>%
+    group_by(term) %>%
+    summarise(count = n()) %>%
+    arrange(desc(count))
+}
+
+Overall <- Freq(data)
+Analytic <- Freq(data %>% filter(school == 'analytic'))
+Aristotle <- Freq(data %>% filter(school == 'aristotle'))
+Capitalism <- Freq(data %>% filter(school == 'capitalism'))
+Communism <- Freq(data %>% filter(school == 'communism'))
+Continental <- Freq(data %>% filter(school == 'continental'))
+Empiricism <- Freq(data %>% filter(school == 'empiricism'))
+German_idealism <- Freq(data %>% filter(school == 'german_idealism'))
+Phenomenology <- Freq(data %>% filter(school == 'phenomenology'))
+Plato <- Freq(data %>% filter(school == 'plato'))
+Rationalism <- Freq(data %>% filter(school == 'rationalism'))
+Stoicism <- Freq(data %>% filter(school == 'stoicism'))
+Nietzsche	<- Freq(data %>% filter(school == 'nietzsche'))	
+Feminism <- Freq(data %>% filter(school == 'feminism'))
+
+#wordcloud
+wc <- function(data, title){
+  rate <- sum(data$count) / sum(Overall$count)
+  
+  wc_data <- data %>% left_join(Overall %>% rename(overall_count = count), by = 'term') %>%
+  mutate(overall_count = replace_na(overall_count, 0),
+         expected = overall_count * rate,
+         diff_percent = (count - expected) / expected,
+         weighted_diff = diff_percent * log(count)) %>%
+  arrange(desc(weighted_diff)) %>%
+  head(60) %>%
+  mutate(sim_freq = c(rep(100, 15), rep(50, 15), rep(30, 15), rep(20, 15))) %>%
+  select(term, sim_freq)
+  
+  layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+  par(mar=rep(0, 4))
+  plot.new()
+  text(x=0.5, y=0.5, title)
+  wordcloud(wc_data$term, wc_data$sim_freq, scale=c(4,0.1),
+            max.words = 50,
+            random.order=FALSE, rot.per=0.35, colors=brewer.pal(8, "Dark2"), main="Title")
+}
+
+
+#sentiment
+term_mat <- function(sentence){
+
+tidy <- VCorpus(VectorSource(sentence)) %>%
+    tm_map(removePunctuation) %>%
+    tm_map(removeWords, character(0)) %>%
+    tm_map(removeWords, stopwords("en")) %>%
+    TermDocumentMatrix() %>%
+    tidy() 
+
+ifelse(nrow(tidy) == 0, 0, tidy %>%
+    inner_join(get_sentiments("afinn"), by = c('term' = 'word')) %>%
+    pull(value) %>%
+    sum())
+  
+}
+sentiment <- data %>% 
+  mutate(title_id = dense_rank(title)) %>%
+  group_by(title) %>% 
+  mutate(sentence_id = row_number()) %>%
+  ungroup() %>%
+  select(title, title_id, sentence_id, sentence_str, school) %>%
+  group_by(title_id, sentence_id) %>%
+  mutate(sentiment = term_mat(sentence_str))
+```
+
+```{r}
+data %>% select(school) %>% distinct()
+```
+
+Because I was so new to the field of philosophy, the moment I opened the data I had a childish question. Why are there so many schools of thought in philosophy, and how do people distinguish between them? As a philosophical "idiot," may I be able to quickly understand the main ideas of each school? Of course, this is a fantasy. But I remembered that I once saw a video on how to quickly improve reading speed. That video shows that when people read text, they only need to read the first three or four letters of each word to automatically make up the entire word. So we may conclude that the first three to four letters of most vocabulary can be used to distinguish between vocabulary. By analogy, can we then distinguish schools by extracting some of the words from each school of thought? Also, Whether the trend of sentences sentiment change varies in each articles from different schools or not. Whether these differences can help us distinguish between different schools.
+
+## Representative Vocabularies
+
+Now, a difficulty emerged. How can we find the **Representative Vocabularies**. Since our data only contain 59 texts in total, it is absurd to use three or four texts (even not books) to find a representative vocabularies of a school. But at the moment I'm just trying to make an attempt at that.
+
+It's obvious we cannot simply pick the words with the highest frequency. Look at the tibble ordered by counts (frequencies) of words here, it's not hard to find the top words are all commonly used in all schools. So, they are not representative of the school -- analytic.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+Analytic %>% left_join(Overall %>% rename(overall_count = count), by = 'term') %>%
+  mutate(overall_count = replace_na(overall_count, 0)) %>%
+  arrange(desc(count)) %>%
+  head(10)
+```
+
+The words we really want to extract should be the word that one school has a lot of but other schools mention little or even not mention. This means, we can obtain a word's expected frequency in a school according to its frequency in all of the schools. Then, its representativeness can then be judged based on the percentage at which it exceeds the expected frequency. Take the word *one* in the previous table as an example. We know there are `sum(Overall$count)`words in all texts, and `sum(Analytic$count)` words in the texts of Analytic school. Since the word *one* shows up 38579 times in all texts, its expected frequency in Analytic school should be $\text{Overall Frequency} * \frac{sum(\text{Analytic Words})}{sum(\text{Overall Words})}$ which is `38579*sum(Analytic$count)/sum(Overall$count)`. So, the percentage of the word *one* exceed the expected frequency is $\frac{5194 - \text{Expected Frequency}}{\text{Expected Frequency}}$ which is `(5194 - 38579*sum(Analytic$count)/sum(Overall$count)) / (38579*sum(Analytic$count)/sum(Overall$count))`. In this way, we can find the percentage of all words exceeding the expected frequency, and sort the percentages in descending order. And then, is the word at the top of this list what we want?
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+rate <- sum(Analytic$count) / sum(Overall$count)
+
+Analytic %>% left_join(Overall %>% rename(overall_count = count), by = 'term') %>%
+  mutate(overall_count = replace_na(overall_count, 0),
+         expected = overall_count * rate,
+         diff_percent = (count - expected) / expected) %>%
+  arrange(desc(diff_percent)) %>% 
+  slice(749:749) %>%
+  bind_rows(Analytic %>% 
+              left_join(Overall %>% rename(overall_count = count), by = 'term') %>%
+              mutate(overall_count = replace_na(overall_count, 0),
+                     expected = overall_count * rate,
+                     diff_percent = (count - expected) / expected) %>%
+              arrange(desc(count)) %>%
+                slice(15:15))
+```
+
+This table can clearly tell us that the selection of representative words cannot be completely dependent on the percentages. We cannot say word *unanalysable* are more representative than *theory* just because *unanalysable* are not mentioned by any other schools. But the frequency of *theory* are mentioned 384.78% more than the general frequency wth 1899 times. It should be a **Representative Vocabularies** for Analytic school. So, the percentages should be weighted according to the frequency (count). But how to set this weight has become a difficult problem to overcome. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# dynamic plot
+{Analytic %>%
+  ggplot(aes(x=count)) + 
+  geom_histogram(aes(y=..density..), colour="black", fill="white") +
+  geom_density(alpha=.2, fill="#FF6666") + 
+  scale_x_log10() + 
+  labs(title="Density for Analytic Words Count")} %>% ggplotly()
+```
+
+Since both the frequencies and the percentages will impact our decision on selecting **Representative Vocabularies**, the weight should be related to the frequencies. Here, we make the histogram and density plot for *count* (frequency). It's a dynamic plot, we can play with it. The **Representative Vocabularies** we really want is those that are close to the end of the tail in this plot. In other words, our selection should be the words with higher percentage of exceeding the general frequency, but its should have some universality for the school at the same time. Then we can infer the percentages of the words with higher frequency should be enclosed with a higher weight, and vice versa. I spent a lot of time on producing am appropriate weight factor for each frequency, but I haven't been able to come to a conclusion until now. It should be close to being proportional to frequency, but it also need to be smaller when the frequency is large enough. At the moment I think the logarithmic ratio might be a good choice, so we choose it for now.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+Analytic %>% left_join(Overall %>% rename(overall_count = count), by = 'term') %>%
+  mutate(overall_count = replace_na(overall_count, 0),
+         expected = overall_count * rate,
+         diff_percent = (count - expected) / expected,
+         weighted_diff = diff_percent * log(count)) %>%
+  arrange(desc(weighted_diff)) %>%
+  head(10)
+```
+
+Now, the mimic frequencies are needed for better plots of word cloud.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+wc(Analytic, "Analytic")
+wc(Aristotle, "Aristotle")
+wc(Capitalism, "Capitalism")
+wc(Communism, "Communism")
+wc(Continental, "Continental")
+wc(Empiricism, "Empiricism")
+wc(German_idealism, "German_idealism")
+wc(Phenomenology, "Phenomenology")
+wc(Plato, "Plato")
+wc(Rationalism, "Rationalism")
+wc(Stoicism, "Stoicism")			
+wc(Nietzsche, "Nietzsche")				
+wc(Feminism, "Feminism")
+```
+
+## Sentences Sentiment Change
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+{sentiment %>%
+    ggplot(., aes(x = sentence_id, y = sentiment, group = title, color = title)) +
+    geom_line(alpha = 0.6, show.legend = FALSE) +
+    facet_wrap(~ school, scales = "free")} %>% ggplotly()
+```
+
+They're dynamic pictures, feel free to play with them. However, this exploration of the pattern of sentence sentiment change is just a thought. In this data, it's unpractical. First, it only contained texts instead of whole books/documents. Second, there's no paragraph ID in this document. If we truly want to analyze the pattern of sentiment expression, we should work on the paragraph level. Also, the texts this data contained might be the dialogs, instead of the authors' statements. If the above conditions are met, some sentiment change patterns should appear for each author's statement.
