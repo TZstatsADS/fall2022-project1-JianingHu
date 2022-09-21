@@ -1,0 +1,52 @@
+#frequency
+Freq <- function(data) {
+    VCorpus(VectorSource(data$sentence_str)) %>%
+    tm_map(removePunctuation) %>%
+    tm_map(removeWords, stopwords("en")) %>%
+    tm_map(removeWords, character(0)) %>%
+    TermDocumentMatrix() %>%
+    tidy() %>%
+    group_by(term) %>%
+    summarise(count = n()) %>%
+    arrange(desc(count))
+}
+
+#wordcloud
+wc <- function(data, title){
+  rate <- sum(data$count) / sum(Overall$count)
+  
+  wc_data <- data %>% left_join(Overall %>% rename(overall_count = count), by = 'term') %>%
+  mutate(overall_count = replace_na(overall_count, 0),
+         expected = overall_count * rate,
+         diff_percent = (count - expected) / expected,
+         weighted_diff = diff_percent * log(count)) %>%
+  arrange(desc(weighted_diff)) %>%
+  head(60) %>%
+  mutate(sim_freq = c(rep(100, 15), rep(50, 15), rep(30, 15), rep(20, 15))) %>%
+  select(term, sim_freq)
+  
+  layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+  par(mar=rep(0, 4))
+  plot.new()
+  text(x=0.5, y=0.5, title)
+  wordcloud(wc_data$term, wc_data$sim_freq, scale=c(4,0.1),
+            max.words = 50,
+            random.order=FALSE, rot.per=0.35, colors=brewer.pal(8, "Dark2"), main="Title")
+}
+
+
+#sentiment
+term_mat <- function(sentence){
+
+    tidy <- VCorpus(VectorSource(sentence)) %>%
+    	tm_map(removePunctuation) %>%
+    	tm_map(removeWords, character(0)) %>%
+    	tm_map(removeWords, stopwords("en")) %>%
+    	TermDocumentMatrix() %>%
+    	tidy() 
+
+    ifelse(nrow(tidy) == 0, 0, tidy %>%
+    	inner_join(get_sentiments("afinn"), by = c('term' = 'word')) %>%
+    	pull(value) %>%
+    	sum())  
+}
